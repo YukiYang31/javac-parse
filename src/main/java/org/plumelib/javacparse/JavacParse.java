@@ -18,6 +18,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Function;
 import javax.tools.DiagnosticCollector;
 import javax.tools.DiagnosticListener;
 import javax.tools.JavaFileObject;
@@ -72,12 +73,12 @@ public final class JavacParse {
     if (parsedCU.hasParseError()) {
       String msg = parsedCU.getParseErrorMessages();
       if (msg.isEmpty()) {
-        throw new Error("Has parse errors, but empty message: " + parsedCU.getDiagnostics());
+        throw new Error("Has parse errors, but empty message: " + parsedCU.diagnostics());
       }
       throw new IllegalArgumentException("Invalid type declaration (" + msg + "): " + classSource);
     }
 
-    CompilationUnitTree cu = parsedCU.getTree();
+    CompilationUnitTree cu = parsedCU.tree();
 
     if (!cu.getImports().isEmpty()) {
       throw new IllegalArgumentException(
@@ -101,14 +102,13 @@ public final class JavacParse {
     }
     if (decls.size() != 1) {
       throw new IllegalArgumentException(
-          String.format(
-              "Type declaration source code has %d top-level forms, not 1: %s",
-              decls.size(), classSource));
+          "Type declaration source code has %d top-level forms, not 1: %s"
+              .formatted(decls.size(), classSource));
     }
 
     Tree decl = decls.get(0);
-    if (decl instanceof ClassTree) {
-      return new JavacParseResult<>((ClassTree) decl, parsedCU.getDiagnostics());
+    if (decl instanceof ClassTree ct) {
+      return new JavacParseResult<>(ct, parsedCU.diagnostics());
     } else {
       throw new IllegalArgumentException(
           "source code should be a type declaration but is "
@@ -150,12 +150,12 @@ public final class JavacParse {
     if (cuParse.hasParseError()) {
       String msg = cuParse.getParseErrorMessages();
       if (msg.isEmpty()) {
-        throw new Error("Has parse errors, but empty message: " + cuParse.getDiagnostics());
+        throw new Error("Has parse errors, but empty message: " + cuParse.diagnostics());
       }
       throw new IllegalArgumentException("Invalid expression (" + msg + "): " + expressionSource);
     }
 
-    CompilationUnitTree cu = cuParse.getTree();
+    CompilationUnitTree cu = cuParse.tree();
 
     ClassTree classDecl = (ClassTree) cu.getTypeDecls().get(0);
     List<? extends Tree> members = classDecl.getMembers();
@@ -186,8 +186,6 @@ public final class JavacParse {
   // Low-level routines
   //
 
-  // All the routines below this point are copies of one another.
-
   // Implementation notes:
   // 1. The documentation of Context says "a single Context is used for each invocation of the
   //    compiler".  Re-using the Context causes an error "duplicate context value" in the compiler.
@@ -202,27 +200,12 @@ public final class JavacParse {
    * @return a (parsed) compilation unit, which may include parse errors
    * @throws IOException if there is trouble reading the file
    */
-  @SuppressWarnings("try") // `fileManagerUnused` is not used
   public static JavacParseResult<CompilationUnitTree> parseCompilationUnit(JavaFileObject source)
       throws IOException {
-    Context context = new Context();
-    DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-    context.put(DiagnosticListener.class, diagnostics);
-
-    try (@SuppressWarnings({
-          "UnusedVariable",
-          "PMD.UnusedLocalVariable"
-        }) // `new JavacFileManager` sets a mapping in `context`.
-        JavacFileManager fileManagerUnused =
-            new JavacFileManager(context, true, StandardCharsets.UTF_8)) {
-
-      Log.instance(context).useSource(source);
-      ParserFactory parserFactory = ParserFactory.instance(context);
-      JavacParser parser = parserFactory.newParser(source.getCharContent(false), true, true, true);
-      CompilationUnitTree cu = parser.parseCompilationUnit();
-      ((JCCompilationUnit) cu).sourcefile = source;
-      return new JavacParseResult<>(cu, diagnostics.getDiagnostics());
-    }
+    JavacParseResult<CompilationUnitTree> result =
+        parseWith(source, JavacParser::parseCompilationUnit);
+    ((JCCompilationUnit) result.tree()).sourcefile = source;
+    return result;
   }
 
   /**
@@ -239,26 +222,9 @@ public final class JavacParse {
    * @deprecated may parse a prefix rather than the whole string
    */
   @Deprecated // not for removal
-  @SuppressWarnings("try") // `fileManagerUnused` is not used
   public static JavacParseResult<ExpressionTree> parseExpression(JavaFileObject source)
       throws IOException {
-    Context context = new Context();
-    DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-    context.put(DiagnosticListener.class, diagnostics);
-
-    try (@SuppressWarnings({
-          "UnusedVariable",
-          "PMD.UnusedLocalVariable"
-        }) // `new JavacFileManager` sets a mapping in `context`.
-        JavacFileManager fileManagerUnused =
-            new JavacFileManager(context, true, StandardCharsets.UTF_8)) {
-
-      Log.instance(context).useSource(source);
-      ParserFactory parserFactory = ParserFactory.instance(context);
-      JavacParser parser = parserFactory.newParser(source.getCharContent(false), true, true, true);
-      ExpressionTree eTree = parser.parseExpression();
-      return new JavacParseResult<>(eTree, diagnostics.getDiagnostics());
-    }
+    return parseWith(source, JavacParser::parseExpression);
   }
 
   /**
@@ -268,9 +234,24 @@ public final class JavacParse {
    * @return a (parsed) type use, possibly an ErroneousTree
    * @throws IOException if there is trouble reading the file
    */
-  @SuppressWarnings("try") // `fileManagerUnused` is not used
   public static JavacParseResult<ExpressionTree> parseTypeUse(JavaFileObject source)
       throws IOException {
+    return parseWith(source, JavacParser::parseType);
+  }
+
+  /**
+   * Creates a javac parser for {@code source} and applies {@code parserFn} to it, returning the
+   * result.
+   *
+   * @param <T> the type of parse tree produced
+   * @param source the source to parse
+   * @param parserFn the parsing operation to apply to the parser
+   * @return the parse result
+   * @throws IOException if there is trouble reading the file
+   */
+  @SuppressWarnings("try") // `fileManagerUnused` is not used
+  private static <T extends Tree> JavacParseResult<T> parseWith(
+      JavaFileObject source, Function<JavacParser, T> parserFn) throws IOException {
     Context context = new Context();
     DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
     context.put(DiagnosticListener.class, diagnostics);
@@ -285,8 +266,7 @@ public final class JavacParse {
       Log.instance(context).useSource(source);
       ParserFactory parserFactory = ParserFactory.instance(context);
       JavacParser parser = parserFactory.newParser(source.getCharContent(false), true, true, true);
-      ExpressionTree eTree = parser.parseType();
-      return new JavacParseResult<>(eTree, diagnostics.getDiagnostics());
+      return new JavacParseResult<>(parserFn.apply(parser), diagnostics.getDiagnostics());
     }
   }
 }

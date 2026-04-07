@@ -23,11 +23,17 @@ class JavacParseTest {
 
     // Import and package
     String si1 = "package x.y.z;\n";
-    String si2 = "import a.b.C.d;\nimport x.y.Z;\n";
+    String si2 =
+        """
+        import a.b.C.d;
+        import x.y.Z;
+        """;
 
     // Compilation unit.
     String scu1 =
-        "class MyClass { void m() {} } \nclass OtherClass { String f = \"hello world\"; }";
+        """
+        class MyClass { void m() {} }\s
+        class OtherClass { String f = "hello world"; }""";
     String scu2 = si1 + scu1;
     String scu3 = si2 + scu1;
     String scu4 = si1 + si2 + scu1;
@@ -131,9 +137,9 @@ class JavacParseTest {
     assertNoParseError(JavacParse.parseExpression(e7), e7);
     assertNoParseError(JavacParse.parseExpression(e8), e8);
     JavacParseResult<ExpressionTree> e7jpr = JavacParse.parseExpression(e7);
-    assertTrue(e7jpr.getTree() instanceof MemberSelectTree);
+    assertTrue(e7jpr.tree() instanceof MemberSelectTree);
     JavacParseResult<ExpressionTree> e8jpr = JavacParse.parseExpression(e8);
-    assertTrue(e8jpr.getTree() instanceof LiteralTree);
+    assertTrue(e8jpr.tree() instanceof LiteralTree);
 
     assertIllegalArgument(() -> JavacParse.parseExpression(scu1), scu1);
     assertIllegalArgument(() -> JavacParse.parseExpression(scu2), scu2);
@@ -164,7 +170,7 @@ class JavacParseTest {
    */
   void assertNoParseError(JavacParseResult<? extends Tree> jpr, String s) {
     if (jpr.hasParseError()) {
-      throw new Error("Code=" + s + ", diagnostics=" + jpr.getDiagnostics());
+      throw new Error("Code=" + s + ", diagnostics=" + jpr.diagnostics());
     }
   }
 
